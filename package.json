@@ -1,0 +1,15 @@
+{
+  "name": "pitch-detection-demo",
+  "version": "1.0.0",
+  "description": "A web application for real-time pitch detection",
+  "main": "index.html",
+  "scripts": {
+    "start": "http-server -c-1"
+  },
+  "dependencies": {
+    "pitchy": "^4.0.7"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+} 
