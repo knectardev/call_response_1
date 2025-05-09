@@ -105,13 +105,28 @@
         .result .timeline-header {
             margin-top: 0.5rem;
         }
+        .sound-type-btn {
+            background: #345;
+            font-size: 0.9rem;
+            padding: 0.5rem 1rem;
+        }
+        .sound-type-btn.active {
+            background: #4af;
+        }
     </style>
 </head>
 <body>
     <h1 style="margin-top:2rem;">Pitch Detection Demo</h1>
     <div class="container">
         <div class="controls-col">
-            <button id="recordButton">Start Recording</button>
+            <button id="recordButton">Hold to Record</button>
+            <button id="logRawEventsBtn">Log Raw Note Events</button>
+            <button id="logMergedEventsBtn">Log Merged Note Events</button>
+            <div id="sound-type-buttons" style="display:flex;gap:0.5rem;margin:0.5rem 0;">
+                <button id="sine-wave-btn" class="sound-type-btn active">Sine Wave</button>
+                <button id="square-wave-btn" class="sound-type-btn">Square Wave</button>
+                <button id="triangle-wave-btn" class="sound-type-btn">Triangle Wave</button>
+            </div>
             <div id="slider-area"></div>
             <div id="parameter-controls" style="margin:0;display:flex;flex-direction:column;gap:1.2rem;justify-content:flex-start;background:#2228;padding:1rem 1.5rem;border-radius:10px;min-width:220px;">
                 <div>
@@ -129,18 +144,18 @@
                 </div>
                 <div>
                     <label for="min-clarity-percent" style="font-weight:bold;">Min clarity (%):</label>
-                    <input id="min-clarity-percent" type="range" min="0" max="100" step="1" value="60" style="width:120px;">
-                    <span id="min-clarity-percent-value">60</span>
+                    <input id="min-clarity-percent" type="range" min="0" max="100" step="1" value="65" style="width:120px;">
+                    <span id="min-clarity-percent-value">65</span>
                 </div>
                 <div>
                     <label for="min-pitch" style="font-weight:bold;">Min pitch (Hz):</label>
-                    <input id="min-pitch" type="range" min="20" max="2000" step="1" value="80" style="width:120px;">
-                    <span id="min-pitch-value">80</span>
+                    <input id="min-pitch" type="range" min="100" max="500" step="1" value="100" style="width:120px;">
+                    <span id="min-pitch-value">100</span>
                 </div>
                 <div>
                     <label for="max-pitch" style="font-weight:bold;">Max pitch (Hz):</label>
-                    <input id="max-pitch" type="range" min="20" max="20000" step="1" value="1000" style="width:120px;">
-                    <span id="max-pitch-value">1000</span>
+                    <input id="max-pitch" type="range" min="100" max="500" step="1" value="500" style="width:120px;">
+                    <span id="max-pitch-value">500</span>
                 </div>
             </div>
             <canvas id="visualizer" class="visualizer"></canvas>
@@ -180,12 +195,14 @@
     let noteStartTime = null;
     let recordingStartTime = null;
     let lastFreq = 0;
-    let minDurationThreshold = 0.2;
+    let minDurationThreshold = 0.05;
     let detector = null;
     let minVolumeDecibels = -20;
-    let minClarityPercent = 60;
-    let minPitch = 80;
-    let maxPitch = 1000;
+    let minClarityPercent = 65;
+    let minPitch = 100;
+    let maxPitch = 500;
+    let state = 'idle'; // 'recording', 'playing', 'waiting'
+    let currentWaveform = 'sine';
 
     const MIC_PRESETS = {
         high: {
@@ -204,7 +221,7 @@
             minVolumeDecibels: -20,
             minClarityPercent: 65,
             minPitch: 100,
-            maxPitch: 1000
+            maxPitch: 500
         }
     };
 
@@ -327,9 +344,32 @@
         renderTimelineAndTable(resultDiv);
     }
 
+    function mergeAdjacentNotes(events, freqTolerance = 5, gapTolerance = 0.1) {
+        if (events.length === 0) return [];
+        const merged = [events[0]];
+        for (let i = 1; i < events.length; i++) {
+            const prev = merged[merged.length - 1];
+            const curr = events[i];
+            if (
+                curr.note === prev.note &&
+                Math.abs(curr.frequency - prev.frequency) < freqTolerance &&
+                (curr.startTime - prev.endTime) < gapTolerance
+            ) {
+                // Merge: extend previous note
+                prev.endTime = curr.endTime;
+                prev.duration = prev.endTime - prev.startTime;
+            } else {
+                merged.push(curr);
+            }
+        }
+        return merged;
+    }
+
     function renderTimelineAndTable(resultDiv) {
         // Filter out short notes
         const filteredEvents = noteEvents.filter(event => event.duration >= minDurationThreshold);
+        // Merge adjacent notes
+        const mergedEvents = mergeAdjacentNotes(filteredEvents, 5, 0.1);
 
         // Create a flex container for button and timeline/table
         const flexDiv = document.createElement('div');
@@ -343,7 +383,7 @@
         playBtn.style.fontWeight = 'bold';
         playBtn.onclick = async function() {
             playBtn.disabled = true;
-            await playMelodyWithHighlight(filteredEvents);
+            await playMelodyWithHighlight(mergedEvents);
             playBtn.disabled = false;
         };
         flexDiv.appendChild(playBtn);
@@ -373,9 +413,9 @@
         timelineDiv.style.padding = '8px 0';
 
         // Calculate total duration
-        const totalDuration = filteredEvents.reduce((sum, n) => sum + n.duration, 0);
+        const totalDuration = mergedEvents.reduce((sum, n) => sum + n.duration, 0);
         // Timeline blocks
-        filteredEvents.forEach(event => {
+        mergedEvents.forEach(event => {
             const block = document.createElement('div');
             block.style.height = '40px';
             block.style.width = (event.duration / totalDuration * 300) + 'px';
@@ -404,7 +444,7 @@
         // Data table
         let tableHtml = `<table id="notesTable" style="width:100%;margin-top:0;background:#fff2;border-radius:8px;color:#fff;">
             <tr><th>Note</th><th>Frequency (Hz)</th><th>Duration (s)</th></tr>`;
-        filteredEvents.forEach(event => {
+        mergedEvents.forEach(event => {
             tableHtml += `<tr><td>${event.note}</td><td>${event.frequency.toFixed(2)}</td><td>${event.duration.toFixed(2)}</td></tr>`;
         });
         tableHtml += '</table>';
@@ -421,15 +461,24 @@
         const table = document.getElementById('notesTable');
         const events = filteredEvents || noteEvents;
         for (let i = 0; i < events.length; i++) {
-            const row = table.rows[i + 1]; // skip header row
-            row.style.background = '#ff0';
-            row.style.color = '#234';
+            // Skip table row highlighting for 'Silence' events
+            if (events[i].note === 'Silence') {
+                await new Promise(resolve => setTimeout(resolve, events[i].duration * 1000));
+                continue;
+            }
+            const row = table ? table.rows[i + 1] : null; // skip header row
+            if (row) {
+                row.style.background = '#ff0';
+                row.style.color = '#234';
+            }
             // Use the frequency from NOTE_FREQS for the note name
             const noteObj = NOTE_FREQS.find(n => n.name === events[i].note);
             const freqToPlay = noteObj ? noteObj.freq : events[i].frequency;
             await playSingleNote(freqToPlay, events[i].duration);
-            row.style.background = '';
-            row.style.color = '';
+            if (row) {
+                row.style.background = '';
+                row.style.color = '';
+            }
         }
     }
 
@@ -438,7 +487,7 @@
             const ctx = audioContext;
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
-            osc.type = 'sine';
+            osc.type = currentWaveform;
             osc.frequency.value = freq;
             gain.gain.value = 0.18;
             osc.connect(gain).connect(ctx.destination);
@@ -485,63 +534,140 @@
         if (note) lastFreq = pitch;
     }
 
-    // Move toggleRecording to global scope
-    window.toggleRecording = async function() {
-        const button = document.getElementById('recordButton');
-        if (!isRecording) {
-            try {
-                if (!audioContext) {
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                }
-                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                const source = audioContext.createMediaStreamSource(mediaStream);
-                analyser = audioContext.createAnalyser();
-                analyser.fftSize = 2048;
-                source.connect(analyser);
-                const dataArray = new Uint8Array(analyser.frequencyBinCount);
-                resetNoteTracking();
-                detector = PitchDetector.forFloat32Array(analyser.fftSize);
-                detector.minVolumeDecibels = minVolumeDecibels;
-                function update() {
-                    const now = performance.now();
-                    analyser.getByteFrequencyData(dataArray); // for visualizer
-                    drawVisualizer(dataArray);
-                    detectPitch(dataArray, now); // now uses Pitchy
-                    animationFrame = requestAnimationFrame(update);
-                }
-                update();
-                isRecording = true;
-                button.textContent = 'Stop Recording';
-                document.getElementById('result').innerHTML = '<div>Recording... Please sing or play a note.</div>';
-            } catch (error) {
-                console.error('Error starting recording:', error);
-                document.getElementById('result').innerHTML = '<div>Error: Could not access microphone. Please check permissions.</div>';
+    // Restore manual record button and remove silence detection and 2s silence event
+    const recordButton = document.getElementById('recordButton');
+    if (recordButton) {
+        recordButton.style.display = '';
+        recordButton.textContent = 'Hold to Record';
+        recordButton.onmousedown = async () => {
+            if (!isRecording) {
+                await startManualRecording();
             }
-        } else {
-            if (mediaStream) {
-                mediaStream.getTracks().forEach(track => track.stop());
+        };
+        recordButton.onmouseup = () => {
+            if (isRecording) {
+                stopManualRecording();
             }
-            if (animationFrame) {
-                cancelAnimationFrame(animationFrame);
+        };
+        recordButton.onmouseleave = () => {
+            if (isRecording) {
+                stopManualRecording();
             }
-            isRecording = false;
-            button.textContent = 'Start Recording';
-            if (currentNote && noteStartTime !== null) {
-                const now = performance.now();
-                noteEvents.push({
-                    note: currentNote,
-                    frequency: lastFreq,
-                    startTime: noteStartTime - recordingStartTime,
-                    endTime: now - recordingStartTime,
-                    duration: (now - noteStartTime) / 1000
-                });
-            }
-            showTimelineAndTable();
-        }
-    };
+        };
+    }
 
-    // Add event listener to the button
-    document.getElementById('recordButton').addEventListener('click', window.toggleRecording);
+    // Manual recording functions
+    async function startManualRecording() {
+        try {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const source = audioContext.createMediaStreamSource(mediaStream);
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 2048;
+            source.connect(analyser);
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            resetNoteTracking();
+            detector = PitchDetector.forFloat32Array(analyser.fftSize);
+            detector.minVolumeDecibels = minVolumeDecibels;
+            function update() {
+                const now = performance.now();
+                analyser.getByteFrequencyData(dataArray);
+                drawVisualizer(dataArray);
+                detectPitch(dataArray, now);
+                animationFrame = requestAnimationFrame(update);
+            }
+            update();
+            isRecording = true;
+            state = 'recording';
+            showStatus('● Recording...');
+        } catch (error) {
+            console.error('Error starting recording:', error);
+            showStatus('Error: Could not access microphone. Please check permissions.');
+        }
+    }
+
+    function stopManualRecording() {
+        if (!isRecording) return;
+        if (mediaStream) {
+            mediaStream.getTracks().forEach(track => track.stop());
+        }
+        if (animationFrame) {
+            cancelAnimationFrame(animationFrame);
+        }
+        // Process one last frame to catch any lingering note
+        if (analyser && detector && audioContext) {
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(dataArray);
+            const now = performance.now();
+            drawVisualizer(dataArray);
+            detectPitch(dataArray, now);
+        }
+        isRecording = false;
+        state = 'playing';
+        // Finalize last note
+        if (currentNote && noteStartTime !== null) {
+            const now = performance.now();
+            noteEvents.push({
+                note: currentNote,
+                frequency: lastFreq,
+                startTime: noteStartTime - recordingStartTime,
+                endTime: now - recordingStartTime,
+                duration: (now - noteStartTime) / 1000
+            });
+        }
+        showStatus('▶ Playing back...');
+        // Merge and filter events
+        const filteredEvents = noteEvents.filter(event => event.duration >= minDurationThreshold);
+        const mergedEvents = mergeAdjacentNotes(filteredEvents, 5, 0.1);
+        showTimelineAndTable();
+        playMelodyWithHighlight(mergedEvents).then(() => {
+            state = 'waiting';
+            showStatus('⏸ Waiting...');
+        });
+    }
+
+    // Helper to show status with color and update visualizer background
+    function showStatus(msg) {
+        const resultDiv = document.getElementById('result');
+        let color = '#ff0';
+        let bg = '';
+        if (state === 'recording') {
+            color = '#fff';
+            bg = 'linear-gradient(90deg, #c00 60%, #a00 100%)';
+        } else if (state === 'playing') {
+            color = '#fff';
+            bg = 'linear-gradient(90deg, #2196f3 60%, #0af 100%)';
+        } else if (state === 'waiting') {
+            color = '#222';
+            bg = 'linear-gradient(90deg, #ff0 60%, #ffa 100%)';
+        }
+        resultDiv.innerHTML = `<div style="font-weight:bold;font-size:1.5rem;padding:0.7rem 0 0.7rem 0;text-align:center;border-radius:8px;background:${bg};color:${color};margin-bottom:1rem;letter-spacing:1px;">${msg}</div>`;
+        // Change visualizer background
+        const visualizer = document.getElementById('visualizer');
+        if (visualizer) {
+            if (state === 'recording') {
+                visualizer.style.background = '#c003';
+            } else if (state === 'playing') {
+                visualizer.style.background = '#2196f333';
+            } else {
+                visualizer.style.background = '#0003';
+            }
+        }
+    }
+
+    // Add event listener for logging raw note events
+    document.getElementById('logRawEventsBtn').addEventListener('click', () => {
+        console.log('Raw noteEvents:', noteEvents);
+    });
+
+    // Add event listener for logging merged note events
+    document.getElementById('logMergedEventsBtn').addEventListener('click', () => {
+        const filteredEvents = noteEvents.filter(event => event.duration >= minDurationThreshold);
+        const mergedEvents = mergeAdjacentNotes(filteredEvents, 5, 0.1);
+        console.log('Merged noteEvents:', mergedEvents);
+    });
 
     // Helper to update slider background
     function updateSliderBg(slider, percent) {
@@ -676,6 +802,28 @@
             cancelAnimationFrame(animationFrame);
         }
     });
+
+    // Add event listeners for sound type buttons
+    document.getElementById('sine-wave-btn').addEventListener('click', () => {
+        currentWaveform = 'sine';
+        updateSoundTypeButtons('sine-wave-btn');
+    });
+    document.getElementById('square-wave-btn').addEventListener('click', () => {
+        currentWaveform = 'square';
+        updateSoundTypeButtons('square-wave-btn');
+    });
+    document.getElementById('triangle-wave-btn').addEventListener('click', () => {
+        currentWaveform = 'triangle';
+        updateSoundTypeButtons('triangle-wave-btn');
+    });
+
+    function updateSoundTypeButtons(activeButtonId) {
+        const buttons = document.querySelectorAll('.sound-type-btn');
+        buttons.forEach(btn => {
+            btn.classList.remove('active');
+        });
+        document.getElementById(activeButtonId).classList.add('active');
+    }
     </script>
 </body>
 </html> 
